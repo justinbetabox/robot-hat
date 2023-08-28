@@ -1,0 +1,22 @@
+Metadata-Version: 2.1
+Name: robot-hat
+Version: 2.0.4
+Summary: Library for SunFounder Robot Hat
+Home-page: https://github.com/sunfounder/robot-hat/tree/v2.0
+Author: SunFounder
+Author-email: service@sunfounder.com
+License: GNU
+Keywords: python raspberry pi GPIO sunfounder
+Platform: UNKNOWN
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: Topic :: Software Development :: Build Tools
+Classifier: License :: OSI Approved :: GNU License
+Classifier: Programming Language :: Python :: 3
+License-File: LICENSE
+
+Robot Hat
+=======================
+Library for Robot Hat
+
+

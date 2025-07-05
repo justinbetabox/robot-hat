@@ -28,7 +28,7 @@ SOFTVOL_SPEAKER_NAME="robot-hat speaker"
 SOFTVOL_MIC_NAME="robot-hat mic"
 
 # ----- robot hat 5 -----
-HAT_DEVICE_TREE="/proc/decvice-tree/"
+HAT_DEVICE_TREE="/proc/device-tree/"
 HAT_UUIDs=(
     "9daeea78-0000-076e-0032-582369ac3e02",
 )

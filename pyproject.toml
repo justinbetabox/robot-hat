@@ -12,7 +12,6 @@ dependencies = [
   "smbus2",
   "gpiozero",
   "RPi.GPIO>=0.7.0",
-  "pyaudio",
 ]
 
 [project.urls]

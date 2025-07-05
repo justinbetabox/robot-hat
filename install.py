@@ -48,6 +48,7 @@ def install_system_packages():
         'python3-dev', 'git', 'build-essential',
         'libi2c-dev', 'i2c-tools',
         'libttspico-utils',  # Provides pico2wave for TTS engine
+        'python3-pyaudio',
     ]
     missing = []
     for pkg in pkgs:

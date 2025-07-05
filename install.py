@@ -49,6 +49,11 @@ def install_system_packages():
         'libi2c-dev', 'i2c-tools',
         'libttspico-utils',  # Provides pico2wave for TTS engine
         'python3-pyaudio',
+        'alsa-utils',
+        'pulseaudio',
+        'pulseaudio-utils',
+        'jq',
+        'sox',
     ]
     missing = []
     for pkg in pkgs:

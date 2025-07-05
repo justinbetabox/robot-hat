@@ -1,42 +1,46 @@
 #!/usr/bin/env python3
-from .basic import BasicClass
+"""
+Pin manipulation class for Robot Hat.
+"""
 import gpiozero  # https://gpiozero.readthedocs.io/en/latest/installing.html
 from gpiozero import OutputDevice, InputDevice, Button
-from typing import Union, Optional, Dict, Any
+from typing import Union, Optional, Dict, Any, Callable
+
+from .basic import BasicClass
 
 
 class Pin(BasicClass):
     """Pin manipulation class"""
 
-    OUT = 0x01
+    OUT: int = 0x01
     """Pin mode output"""
-    IN = 0x02
+    IN: int = 0x02
     """Pin mode input"""
 
-    PULL_UP = 0x11
+    PULL_UP: int = 0x11
     """Pin internal pull up"""
-    PULL_DOWN = 0x12
+    PULL_DOWN: int = 0x12
     """Pin internal pull down"""
-    PULL_NONE = None
+    PULL_NONE: Optional[int] = None
     """Pin internal pull none"""
 
-    IRQ_FALLING = 0x21
+    IRQ_FALLING: int = 0x21
     """Pin interrupt falling"""
-    IRQ_RISING = 0x22
+    IRQ_RISING: int = 0x22
     """Pin interrupt rising"""
-    IRQ_RISING_FALLING = 0x23
+    IRQ_RISING_FALLING: int = 0x23
     """Pin interrupt both rising and falling"""
 
     _dict: Dict[str, int] = {
         "D0": 17,
-        "D1": 4,   # Changed
+        "D1": 4,
         "D2": 27,
         "D3": 22,
         "D4": 23,
         "D5": 24,
-        "D6": 25,  # Removed
-        "D7": 4,   # Removed
-        "D8": 5,   # Removed
+        "D6": 25,
+        "D7": 4,
+        "D8": 5,
         "D9": 6,
         "D10": 12,
         "D11": 13,
@@ -45,150 +49,156 @@ class Pin(BasicClass):
         "D14": 26,
         "D15": 20,
         "D16": 21,
-        "SW": 25,  # Changed
+        "SW": 25,
         "USER": 25,
         "LED": 26,
         "BOARD_TYPE": 12,
         "RST": 16,
         "BLEINT": 13,
         "BLERST": 20,
-        "MCURST": 5,  # Changed
+        "MCURST": 5,
         "CE": 8,
     }
 
-    def __init__(self, pin: Union[int, str], mode: Optional[int] = None, pull: Optional[int] = None, active_state: Optional[bool] = None, *args, **kwargs) -> None:
+    def __init__(
+        self,
+        pin: Union[int, str],
+        mode: Optional[int] = None,
+        pull: Optional[int] = None,
+        active_state: Optional[bool] = None,
+        *args: Any,
+        **kwargs: Any
+    ) -> None:
         """
-        Initialize a pin
+        Initialize a pin.
 
-        :param pin: Pin number (int) or board name (str) of Raspberry Pi
-        :param mode: Pin mode (Pin.OUT or Pin.IN)
-        :param pull: Pin pull up/down (Pin.PULL_UP, Pin.PULL_DOWN, or Pin.PULL_NONE)
-        :param active_state: Active state of pin; if True, a HIGH hardware state maps to HIGH in software.
+        :param pin: Pin number (int) or board name (str).
+        :param mode: Pin mode (Pin.OUT or Pin.IN).
+        :param pull: Pull configuration (Pin.PULL_UP, Pin.PULL_DOWN, or Pin.PULL_NONE).
+        :param active_state: Active state mapping for input pulls.
         """
         super().__init__(*args, **kwargs)
 
         # Parse pin input
         if isinstance(pin, str):
-            if pin not in self.dict().keys():
+            if pin not in self._dict:
                 raise ValueError(f'Pin should be one of {list(self._dict.keys())}, not "{pin}"')
-            self._board_name = pin
-            self._pin_num = self.dict()[pin]
+            self._board_name: str = pin
+            self._pin_num: int = self._dict[pin]
         elif isinstance(pin, int):
-            if pin not in self.dict().values():
+            if pin not in self._dict.values():
                 raise ValueError(f'Pin should be one of {list(self._dict.values())}, not "{pin}"')
-            # Save board name(s) associated with the pin
-            self._board_name = {name for name, num in self._dict.items() if num == pin}
+            self._board_name = {name for name, num in self._dict.items() if num == pin}  # type: ignore
             self._pin_num = pin
         else:
-            raise ValueError(f'Pin must be an int or a valid key from {list(self._dict.keys())}, not "{pin}"')
+            raise ValueError(f'Pin must be int or str, not {type(pin)}')
 
-        # Setup initial state
-        self._value = 0
+        self._mode: Optional[int] = None
+        self._pull: Optional[int] = None
+        self._value: int = 0
         self.gpio: Optional[Any] = None
+
         self.setup(mode, pull, active_state)
         self.logger.info("Pin init finished.")
 
     def close(self) -> None:
+        """Close the underlying gpio device."""
         if self.gpio:
             self.gpio.close()
 
     def deinit(self) -> None:
+        """Deinitialize the gpio device and factory."""
         if self.gpio:
             self.gpio.close()
             if hasattr(self.gpio, "pin_factory") and self.gpio.pin_factory:
                 self.gpio.pin_factory.close()
 
-    def setup(self, mode: Optional[int], pull: Optional[int] = None, active_state: Optional[bool] = None) -> None:
+    def setup(
+        self,
+        mode: Optional[int],
+        pull: Optional[int] = None,
+        active_state: Optional[bool] = None
+    ) -> None:
         """
-        Setup the pin
+        Configure pin mode and pull.
 
-        :param mode: Pin mode (Pin.OUT or Pin.IN)
-        :param pull: Pull configuration (Pin.PULL_UP, Pin.PULL_DOWN, or Pin.PULL_NONE)
+        :param mode: Pin mode (None, Pin.OUT, or Pin.IN).
+        :param pull: Pull configuration (PULL_UP, PULL_DOWN, or PULL_NONE).
+        :param active_state: Active state for input device.
         """
-        # Validate mode
-        if mode in [None, self.OUT, self.IN]:
-            self._mode = mode
-        else:
-            raise ValueError('mode parameter error, should be None, Pin.OUT, or Pin.IN')
-        # Validate pull
-        if pull in [self.PULL_NONE, self.PULL_DOWN, self.PULL_UP]:
-            self._pull = pull
-        else:
-            raise ValueError('pull parameter error, should be None, Pin.PULL_NONE, Pin.PULL_DOWN, or Pin.PULL_UP')
+        if mode not in (None, self.OUT, self.IN):
+            raise ValueError('mode must be None, Pin.OUT, or Pin.IN')
+        if pull not in (self.PULL_NONE, self.PULL_DOWN, self.PULL_UP):
+            raise ValueError('pull must be None, Pin.PULL_NONE, Pin.PULL_DOWN, or Pin.PULL_UP')
 
-        # Close any existing gpio instance
+        self._mode = mode
+        self._pull = pull
+
         if self.gpio is not None:
             try:
                 self.gpio.close()
             except Exception:
                 pass
 
-        # Initialize gpio based on mode
-        if mode in [None, self.OUT]:
+        if mode in (None, self.OUT):
             self.gpio = OutputDevice(self._pin_num)
         else:
-            if pull == self.PULL_UP:
-                self.gpio = InputDevice(self._pin_num, pull_up=True, active_state=None)
-            elif pull == self.PULL_DOWN:
-                self.gpio = InputDevice(self._pin_num, pull_up=False, active_state=None)
+            pull_up = True if pull == self.PULL_UP else False
+            if pull == self.PULL_NONE:
+                pull_arg = None
             else:
-                self.gpio = InputDevice(self._pin_num, pull_up=None, active_state=active_state)
+                pull_arg = pull_up
+            self.gpio = InputDevice(self._pin_num, pull_up=pull_arg, active_state=active_state)
 
     def dict(self, _dict: Optional[Dict[str, int]] = None) -> Dict[str, int]:
         """
-        Set/get the pin dictionary
+        Get or set the pin mapping dictionary.
 
-        :param _dict: Optional new pin dictionary.
+        :param _dict: New dictionary to set, or None to retrieve.
         :return: Current pin dictionary.
         """
         if _dict is None:
             return self._dict
-        else:
-            if not isinstance(_dict, dict):
-                raise ValueError(f'Argument should be a dict, not {_dict}')
-            self._dict = _dict
-            return self._dict
+        if not isinstance(_dict, dict):
+            raise ValueError(f'Argument should be a dict, not {_dict}')
+        self._dict = _dict
+        return self._dict
 
     def __call__(self, value: Optional[int] = None) -> int:
-        """
-        Set/get the pin value
-
-        :param value: If provided, set the pin value (0 or 1). Otherwise, return current value.
-        :return: Pin value (0 or 1).
-        """
+        """Alias to get or set pin value."""
         return self.value(value)
 
     def value(self, value: Optional[bool] = None) -> int:
         """
-        Set/get the pin value
+        Get or set the pin state.
 
-        :param value: If provided, set the pin to 0 or 1; otherwise, return current value.
-        :return: Pin value (0 or 1).
+        :param value: If provided, set pin to high (True) or low (False). Otherwise read.
+        :return: Pin state as 0 or 1.
         """
         if value is None:
-            if self._mode in [None, self.OUT]:
+            if self._mode in (None, self.OUT):
                 self.setup(self.IN)
-            result = self.gpio.value
-            self.logger.debug(f"Read pin {self.gpio.pin}: {result}")
+            result: int = int(self.gpio.value)  # type: ignore
+            self.logger.debug(f"Read pin {self._pin_num}: {result}")
             return result
         else:
             if self._mode == self.IN:
                 self.setup(self.OUT)
-            if bool(value):
-                self.gpio.on()
-                value_int = 1
+            level = bool(value)
+            if level:
+                self.gpio.on()  # type: ignore
+                return 1
             else:
-                self.gpio.off()
-                value_int = 0
-            return value_int
+                self.gpio.off()  # type: ignore
+                return 0
 
     def on(self) -> int:
-        """Set pin on (high) and return value 1."""
-        return self.value(1)
+        """Set pin high and return 1."""
+        return self.value(True)
 
     def off(self) -> int:
-        """Set pin off (low) and return value 0."""
-        return self.value(0)
+        """Set pin low and return 0."""
+        return self.value(False)
 
     def high(self) -> int:
         """Alias for on()."""
@@ -198,57 +208,55 @@ class Pin(BasicClass):
         """Alias for off()."""
         return self.off()
 
-    def irq(self, handler, trigger: int, bouncetime: int = 200, pull: Optional[int] = None) -> None:
+    def irq(
+        self,
+        handler: Callable[..., Any],
+        trigger: int,
+        bouncetime: int = 200,
+        pull: Optional[int] = None
+    ) -> None:
         """
-        Set the pin interrupt
+        Configure an interrupt on the pin.
 
-        :param handler: Interrupt handler callback function.
-        :param trigger: Interrupt trigger (Pin.IRQ_RISING, Pin.IRQ_FALLING, or Pin.IRQ_RISING_FALLING).
-        :param bouncetime: Debounce time in milliseconds.
-        :param pull: Pull configuration (Pin.PULL_UP, Pin.PULL_DOWN, or Pin.PULL_NONE).
+        :param handler: Callback for interrupt events.
+        :param trigger: Pin.IRQ_FALLING, IRQ_RISING, or IRQ_RISING_FALLING.
+        :param bouncetime: Debounce in ms.
+        :param pull: Pull configuration (PULL_UP, PULL_DOWN, or PULL_NONE).
         """
-        if trigger not in [self.IRQ_FALLING, self.IRQ_RISING, self.IRQ_RISING_FALLING]:
-            raise ValueError('trigger parameter error, should be Pin.IRQ_FALLING, Pin.IRQ_RISING, or Pin.IRQ_RISING_FALLING')
+        if trigger not in (self.IRQ_FALLING, self.IRQ_RISING, self.IRQ_RISING_FALLING):
+            raise ValueError('Invalid trigger for irq')
+        if pull not in (self.PULL_NONE, self.PULL_DOWN, self.PULL_UP):
+            raise ValueError('Invalid pull for irq')
 
-        if pull in [self.PULL_NONE, self.PULL_DOWN, self.PULL_UP]:
-            self._pull = pull
-            _pull_up = True if pull == self.PULL_UP else False
-        else:
-            raise ValueError('pull parameter error, should be None, Pin.PULL_NONE, Pin.PULL_DOWN, or Pin.PULL_UP')
-
-        pressed_handler = None
-        released_handler = None
-
+        # Prepare Button instance
+        pull_up = True if pull == self.PULL_UP else False
         if not isinstance(self.gpio, Button):
-            if self.gpio is not None:
+            if self.gpio:
                 self.gpio.close()
-            self.gpio = Button(pin=self._pin_num, pull_up=_pull_up, bounce_time=float(bouncetime / 1000))
-            self._bouncetime = bouncetime
+            self.gpio = Button(pin=self._pin_num, pull_up=pull_up, bounce_time=bouncetime/1000)
         else:
-            if bouncetime != getattr(self, "_bouncetime", bouncetime):
-                pressed_handler = self.gpio.when_pressed
-                released_handler = self.gpio.when_released
+            if bouncetime != getattr(self, '_bouncetime', None):
+                prev_pressed = self.gpio.when_pressed
+                prev_released = self.gpio.when_released
                 self.gpio.close()
-                self.gpio = Button(pin=self._pin_num, pull_up=_pull_up, bounce_time=float(bouncetime / 1000))
-                self._bouncetime = bouncetime
+                self.gpio = Button(pin=self._pin_num, pull_up=pull_up, bounce_time=bouncetime/1000)
+                self.gpio.when_pressed = prev_pressed  # type: ignore
+                self.gpio.when_released = prev_released  # type: ignore
+        self._bouncetime = bouncetime
 
-        if trigger in [None, self.IRQ_FALLING]:
-            pressed_handler = handler
+        # Assign handlers based on trigger
+        if trigger in (None, self.IRQ_FALLING):
+            self.gpio.when_pressed = handler  # type: ignore
         elif trigger == self.IRQ_RISING:
-            released_handler = handler
-        elif trigger == self.IRQ_RISING_FALLING:
-            pressed_handler = handler
-            released_handler = handler
-
-        if pressed_handler is not None:
-            self.gpio.when_pressed = pressed_handler
-        if released_handler is not None:
-            self.gpio.when_released = released_handler
+            self.gpio.when_released = handler  # type: ignore
+        else:
+            self.gpio.when_pressed = handler  # type: ignore
+            self.gpio.when_released = handler  # type: ignore
 
     def name(self) -> str:
         """
-        Get the pin name as a string (e.g., "GPIO17").
+        Get the GPIO name (e.g., 'GPIO17').
 
-        :return: Pin name.
+        :return: Name string.
         """
         return f"GPIO{self._pin_num}"

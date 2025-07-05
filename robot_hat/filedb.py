@@ -1,19 +1,12 @@
 #!/usr/bin/env python3
 """
-**********************************************************************
-* Filename    : filedb.py
-* Description : A simple file based database.
-* Author      : Cavon
-* Brand       : SunFounder
-* E-mail      : service@sunfounder.com
-* Website     : www.sunfounder.com
-* Update      : Cavon    2016-09-13    New release
-**********************************************************************
+A simple file-based key-value store for Robot Hat configuration.
 """
-
 import os
 from time import sleep
 from typing import Optional
+import pwd
+import grp
 
 
 class fileDB:
@@ -33,10 +26,9 @@ class fileDB:
         :raises ValueError: If no file path is provided.
         """
         self.db: str = db
-        if self.db:
-            self.file_check_create(db, mode, owner)
-        else:
+        if not self.db:
             raise ValueError('db: Missing file path parameter.')
+        self.file_check_create(db, mode, owner)
 
     def file_check_create(self, file_path: str, mode: Optional[str] = None, owner: Optional[str] = None) -> None:
         """
@@ -46,7 +38,7 @@ class fileDB:
         :param mode: The file mode to apply (e.g. '774').
         :param owner: The owner to assign to the file.
         """
-        directory = file_path.rsplit('/', 1)[0]
+        directory = os.path.dirname(file_path)
         try:
             if os.path.exists(file_path):
                 if not os.path.isfile(file_path):
@@ -61,12 +53,25 @@ class fileDB:
                     os.makedirs(directory, mode=0o754)
                     sleep(0.001)
                 with open(file_path, 'w') as f:
-                    f.write("# robot-hat config and calibration value of robots\n\n")
+                    f.write("# robot-hat config and calibration values\n\n")
 
+            # Apply mode if provided
             if mode is not None:
-                os.system(f'sudo chmod {mode} {file_path}')
+                try:
+                    perms = int(mode, 8)
+                    os.chmod(file_path, perms)
+                except ValueError:
+                    print(f"Invalid mode '{mode}'; skipping chmod.")
+            # Apply owner if provided
             if owner is not None:
-                os.system(f'sudo chown -R {owner}:{owner} {directory}')
+                try:
+                    pw = pwd.getpwnam(owner)
+                    gr = grp.getgrnam(owner)
+                    uid, gid = pw.pw_uid, gr.gr_gid
+                    os.chown(file_path, uid, gid)
+                    os.chown(directory, uid, gid)
+                except KeyError:
+                    print(f"User/group '{owner}' not found; skipping chown.")
         except Exception as e:
             raise e
 
@@ -81,16 +86,17 @@ class fileDB:
         try:
             with open(self.db, 'r') as conf:
                 lines = conf.readlines()
-            # Skip header/comment lines
             for line in lines:
-                if line and not line.startswith('#'):
-                    parts = line.split('=')
-                    if len(parts) >= 2 and parts[0].strip() == name:
-                        return parts[1].replace(' ', '').strip()
+                if line.strip().startswith('#') or '=' not in line:
+                    continue
+                key, val = line.split('=', 1)
+                if key.strip() == name:
+                    return val.strip()
             return default_value
         except FileNotFoundError:
-            with open(self.db, 'w') as conf:
-                conf.write("")
+            # Ensure file exists for next time
+            with open(self.db, 'w'):
+                pass
             return default_value
         except Exception:
             return default_value
@@ -110,20 +116,22 @@ class fileDB:
         except FileNotFoundError:
             lines = []
 
-        flag = False
-        new_lines = []
+        updated = False
+        new_lines: list[str] = []
         for line in lines:
-            if line and not line.startswith('#'):
-                parts = line.split('=')
-                if len(parts) >= 2 and parts[0].strip() == name:
-                    new_lines.append(f'{name} = {value}\n')
-                    flag = True
-                else:
-                    new_lines.append(line)
+            if line.strip().startswith('#') or '=' not in line:
+                new_lines.append(line)
+                continue
+            key, _ = line.split('=', 1)
+            if key.strip() == name:
+                new_lines.append(f'{name} = {value}\n')
+                updated = True
             else:
                 new_lines.append(line)
-        if not flag:
-            new_lines.append(f'{name} = {value}\n\n')
+
+        if not updated:
+            new_lines.append(f'{name} = {value}\n')
+
         with open(self.db, 'w') as conf:
             conf.writelines(new_lines)
 

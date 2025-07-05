@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
-from .basic import BasicClass
-from .utils import enable_speaker, disable_speaker
+"""
+Play music, sound effects, and tone control via PyAudio and pygame.
+"""
+import os
 import time
 import threading
-import pyaudio
-import os
 import struct
 import math
-from typing import Optional, Tuple, Union, List
+import logging
+from typing import Optional, Union, Tuple, List, Any
+
+import pyaudio
+import pygame
+
+from .basic import BasicClass
+from .utils import enable_speaker, disable_speaker
+
 
 class Music(BasicClass):
     """Play music, sound effects, and note control."""
-    
+
     FORMAT: int = pyaudio.paInt16
     CHANNELS: int = 1
     RATE: int = 44100
@@ -47,7 +55,7 @@ class Music(BasicClass):
     NOTE_BASE_FREQ: float = 440.0
     NOTE_BASE_INDEX: int = 69
 
-    # MIDI-compatible note names (index corresponds to MIDI note number)
+    # MIDI-compatible note names
     NOTES: List[Optional[str]] = [
         None, None, None, None, None, None, None, None, None, None, None, None,
         None, None, None, None, None, None, None, None, None, "A0", "A#0", "B0",
@@ -63,22 +71,15 @@ class Music(BasicClass):
 
     def __init__(self) -> None:
         """
-        Initialize Music. Configures the mixer, time signature, tempo, and key signature.
+        Initialize Music: mixer, tempo, key signature, and enable speaker.
         """
         super().__init__()
-        import warnings
-        # Suppress pygame welcome message
-        warnings_bk = warnings.filters
-        warnings.filterwarnings("ignore")
+        # Suppress pygame welcome prompt
         os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "1"
-        import pygame
-        warnings.filters = warnings_bk
-
-        self.pygame = pygame
-        self.pygame.mixer.init()
-        # Default time signature 4/4, tempo 120 bpm with quarter note beat, and key signature 0.
+        pygame.mixer.init()
+        # Default settings: 4/4 time, 120 bpm quarter-note, key 0
         self.time_signature(4, 4)
-        self.tempo(120, self.QUARTER_NOTE)
+        self.tempo(120.0, self.QUARTER_NOTE)
         self.key_signature(0)
         enable_speaker()
         self.logger.debug("Music module initialized.")
@@ -87,211 +88,193 @@ class Music(BasicClass):
         """
         Set or get the time signature.
 
-        :param top: The numerator of the time signature.
-        :param bottom: The denominator of the time signature.
-        :return: A tuple (top, bottom) representing the time signature.
+        :param top: Numerator.
+        :param bottom: Denominator.
+        :return: (top, bottom)
         """
         if top is None and bottom is None:
             return self._time_signature  # type: ignore
         if bottom is None:
             bottom = top  # type: ignore
-        self._time_signature = (top, bottom)
+        self._time_signature = (top, bottom)  # type: ignore
         self.logger.debug(f"Time signature set to: {self._time_signature}")
         return self._time_signature
 
-    def key_signature(self, key: Optional[Union[int, str]] = None) -> Union[int, None]:
+    def key_signature(self, key: Optional[Union[int, str]] = None) -> int:
         """
-        Set or get the key signature.
+        Set or get key signature.
 
-        :param key: The key signature as an integer or a string (e.g. "##" for 2 sharps or "bbb" for 3 flats).
-        :return: The current key signature as an integer.
+        :param key: Integer or string (# for sharps, b for flats).
+        :return: Current key signature.
         """
         if key is None:
             return self._key_signature  # type: ignore
         if isinstance(key, str):
-            if "#" in key:
+            if '#' in key:
                 key = len(key) * self.KEY_SIGNATURE_SHARP
-            elif "b" in key:
+            elif 'b' in key:
                 key = len(key) * self.KEY_SIGNATURE_FLAT
-        self._key_signature = key
+        self._key_signature = key  # type: ignore
         self.logger.debug(f"Key signature set to: {self._key_signature}")
         return self._key_signature
 
-    def tempo(self, tempo: Optional[float] = None, note_value: Optional[float] = None) -> Union[Tuple[float, float], None]:
+    def tempo(self, tempo: Optional[float] = None, note_value: Optional[float] = None) -> Tuple[float, float]:
         """
-        Set or get the tempo (beats per minute) along with the note value for one beat.
+        Set or get tempo and beat unit.
 
         :param tempo: Beats per minute.
-        :param note_value: The note value that corresponds to one beat (e.g., Music.QUARTER_NOTE).
-        :return: A tuple (tempo, note_value) if setting; otherwise, the current tempo tuple.
+        :param note_value: Note value for one beat.
+        :return: (tempo, note_value)
         """
         if tempo is None and note_value is None:
             return self._tempo  # type: ignore
         if note_value is None:
             note_value = tempo  # type: ignore
-        try:
-            self._tempo = (tempo, note_value)  # type: ignore
-            self.beat_unit = 60.0 / tempo  # seconds per beat at the given tempo
-            self.logger.debug(f"Tempo set to: {self._tempo}, beat unit: {self.beat_unit}")
-            return self._tempo
-        except Exception as e:
-            raise ValueError(f"tempo must be a number, got {tempo}") from e
+        self._tempo = (tempo, note_value)  # type: ignore
+        self.beat_unit = 60.0 / tempo  # seconds per beat
+        self.logger.debug(f"Tempo set to: {self._tempo}, beat unit: {self.beat_unit}")
+        return self._tempo
 
     def beat(self, beat: float) -> float:
         """
-        Calculate the delay (in seconds) for a given beat count based on the current tempo.
+        Calculate delay for given beats.
 
-        :param beat: The beat count (can be fractional).
-        :return: The delay in seconds for that beat.
+        :param beat: Beat count (can be fractional).
+        :return: Delay in seconds.
         """
         delay = beat / self._tempo[1] * self.beat_unit  # type: ignore
-        self.logger.debug(f"Calculated beat delay for {beat} beats: {delay} seconds")
+        self.logger.debug(f"Beat delay for {beat}: {delay}s")
         return delay
 
     def note(self, note: Union[str, int], natural: bool = False) -> float:
         """
-        Get the frequency of a note.
+        Get frequency for a note.
 
-        :param note: The note as a string (e.g., "A4") or its MIDI index.
-        :param natural: If True, do not adjust the note by key signature.
-        :return: Frequency of the note in Hertz.
+        :param note: Note name or MIDI index.
+        :param natural: If True, ignores key signature.
+        :return: Frequency in Hz.
         """
         if isinstance(note, str):
-            if note in self.NOTES:
-                note_index = self.NOTES.index(note)
-            else:
-                raise ValueError(f"Note {note} not found. Note must be in Music.NOTES")
+            if note not in self.NOTES:
+                raise ValueError(f"Note {note} not found")
+            idx = self.NOTES.index(note)
         else:
-            note_index = note
+            idx = note
         if not natural:
-            note_index += self.key_signature()  # type: ignore
-            note_index = min(max(note_index, 0), len(self.NOTES) - 1)
-        note_delta = note_index - self.NOTE_BASE_INDEX
-        freq = self.NOTE_BASE_FREQ * (2 ** (note_delta / 12))
-        self.logger.debug(f"Calculated frequency for note {note} (index {note_index}): {freq} Hz")
+            idx += self.key_signature()  # type: ignore
+            idx = max(0, min(idx, len(self.NOTES)-1))
+        delta = idx - self.NOTE_BASE_INDEX
+        freq = self.NOTE_BASE_FREQ * (2 ** (delta / 12))
+        self.logger.debug(f"Note {note} frequency: {freq}Hz")
         return freq
 
     def sound_play(self, filename: str, volume: Optional[float] = None) -> None:
         """
-        Play a sound effect from a file.
+        Play a sound file synchronously.
 
-        :param filename: The sound effect file name.
-        :param volume: Optional volume percentage (0-100).
+        :param filename: Path to sound file.
+        :param volume: Volume (0-100).
         """
-        sound = self.pygame.mixer.Sound(filename)
+        sound = pygame.mixer.Sound(filename)
         if volume is not None:
-            sound.set_volume(round(volume / 100.0, 2))
-        duration = round(sound.get_length(), 2)
-        self.logger.debug(f"Playing sound {filename} with duration {duration} seconds")
+            sound.set_volume(volume/100.0)
+        length = sound.get_length()
+        self.logger.debug(f"Playing {filename} for {length}s")
         sound.play()
-        time.sleep(duration)
+        time.sleep(length)
 
     def sound_play_threading(self, filename: str, volume: Optional[float] = None) -> None:
         """
-        Play a sound effect in a separate thread.
+        Play a sound file in a separate thread.
 
-        :param filename: The sound effect file name.
-        :param volume: Optional volume percentage (0-100).
+        :param filename: Path to sound file.
+        :param volume: Volume (0-100).
         """
-        thread = threading.Thread(target=self.sound_play, kwargs={"filename": filename, "volume": volume})
+        thread = threading.Thread(target=self.sound_play, args=(filename, volume))
         thread.start()
-        self.logger.debug(f"Started sound_play thread for {filename}")
+        self.logger.debug(f"Started thread for {filename}")
 
     def music_play(self, filename: str, loops: int = 1, start: float = 0.0, volume: Optional[float] = None) -> None:
         """
-        Play a music file.
+        Play music with optional looping.
 
-        :param filename: The music file name.
-        :param loops: Number of loops (0 for infinite looping, 1 for play once, etc.).
-        :param start: Start time in seconds.
-        :param volume: Optional volume percentage (0-100).
+        :param filename: Path to music file.
+        :param loops: Number of loops (0 infinite).
+        :param start: Start position in seconds.
+        :param volume: Volume (0-100).
         """
         if volume is not None:
             self.music_set_volume(volume)
-        self.pygame.mixer.music.load(filename)
-        self.pygame.mixer.music.play(loops, start)
-        self.logger.debug(f"Started music play: {filename}, loops: {loops}, start: {start}")
+        pygame.mixer.music.load(filename)
+        pygame.mixer.music.play(loops, start)
+        self.logger.debug(f"Music play: {filename}, loops={loops}, start={start}")
 
     def music_set_volume(self, value: float) -> None:
         """
-        Set the music volume.
+        Set music playback volume.
 
-        :param value: Volume percentage (0-100).
+        :param value: Volume (0-100).
         """
-        vol = round(value / 100.0, 2)
-        self.pygame.mixer.music.set_volume(vol)
-        self.logger.debug(f"Music volume set to: {vol}")
+        pygame.mixer.music.set_volume(value/100.0)
+        self.logger.debug(f"Music volume: {value}")
 
     def music_stop(self) -> None:
-        """Stop the music."""
-        self.pygame.mixer.music.stop()
-        self.logger.debug("Music stopped.")
+        """Stop music playback."""
+        pygame.mixer.music.stop()
+        self.logger.debug("Music stopped")
 
     def music_pause(self) -> None:
-        """Pause the music."""
-        self.pygame.mixer.music.pause()
-        self.logger.debug("Music paused.")
+        """Pause music playback."""
+        pygame.mixer.music.pause()
+        self.logger.debug("Music paused")
 
     def music_resume(self) -> None:
-        """Resume paused music."""
-        self.pygame.mixer.music.unpause()
-        self.logger.debug("Music resumed.")
-
-    def music_unpause(self) -> None:
-        """Unpause the music (alias for music_resume)."""
-        self.music_resume()
+        """Resume music playback."""
+        pygame.mixer.music.unpause()
+        self.logger.debug("Music resumed")
 
     def sound_length(self, filename: str) -> float:
         """
-        Get the duration of a sound effect.
+        Get length of a sound file.
 
-        :param filename: The sound effect file name.
+        :param filename: Path to sound file.
         :return: Duration in seconds.
         """
-        sound = self.pygame.mixer.Sound(filename)
-        length = round(sound.get_length(), 2)
-        self.logger.debug(f"Sound length for {filename}: {length} seconds")
+        length = pygame.mixer.Sound(filename).get_length()
+        self.logger.debug(f"Sound length for {filename}: {length}s")
         return length
 
     def get_tone_data(self, freq: float, duration: float) -> bytes:
         """
-        Generate tone data for a given frequency and duration.
+        Generate raw PCM tone data.
 
         :param freq: Frequency in Hz.
         :param duration: Duration in seconds.
-        :return: Packed binary tone data.
+        :return: PCM byte string.
         """
-        # Divide duration by 2 as per original design
-        duration /= 2.0
-        frame_count = int(self.RATE * duration)
-        remainder_frames = frame_count % self.RATE
-        wavedata: List[int] = []
-
+        half = duration/2.0
+        frame_count = int(self.RATE * half)
+        remainder = frame_count % self.RATE
+        data: List[int] = []
         for i in range(frame_count):
-            a = self.RATE / freq  # frames per wave
-            b = i / a
-            c = b * (2 * math.pi)
-            d = math.sin(c) * 32767
-            wavedata.append(int(d))
-
-        wavedata.extend([0] * remainder_frames)
-        number_of_bytes = str(len(wavedata))
-        packed_data = struct.pack(number_of_bytes + 'h', *wavedata)
-        self.logger.debug(f"Generated tone data: {len(packed_data)} bytes for freq {freq} Hz, duration {duration*2} sec")
-        return packed_data
+            val = math.sin(2*math.pi*(i*self.RATE/freq)/self.RATE) * 32767
+            data.append(int(val))
+        data.extend([0]*remainder)
+        packed = struct.pack(f'{len(data)}h', *data)
+        self.logger.debug(f"Tone data {len(packed)} bytes for {freq}Hz, {duration}s")
+        return packed
 
     def play_tone_for(self, freq: float, duration: float) -> None:
         """
-        Play a tone for a specified duration.
+        Play a generated tone for a duration.
 
         :param freq: Frequency in Hz.
         :param duration: Duration in seconds.
         """
         p = pyaudio.PyAudio()
         frames = self.get_tone_data(freq, duration)
-        stream = p.open(format=self.FORMAT, channels=self.CHANNELS,
-                        rate=self.RATE, output=True)
+        stream = p.open(format=self.FORMAT, channels=self.CHANNELS, rate=self.RATE, output=True)
         stream.write(frames)
         stream.close()
         p.terminate()
-        self.logger.debug(f"Played tone at {freq} Hz for {duration} sec")
+        self.logger.debug(f"Played tone {freq}Hz for {duration}s")

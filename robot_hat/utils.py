@@ -12,7 +12,6 @@ import math
 from typing import List, Union, Optional, Tuple, Any
 
 from .pin import Pin
-from .adc import ADC
 
 # ANSI color definitions
 GRAY: str = '1;30'
@@ -24,7 +23,7 @@ PURPLE: str = '0;35'
 DARK_GREEN: str = '0;36'
 WHITE: str = '0;37'
 
-_adc_obj: Optional[ADC] = None
+_adc_obj: None
 
 
 def print_color(
@@ -196,10 +195,11 @@ def get_battery_voltage() -> float:
     :return: Battery voltage in volts.
     """
     global _adc_obj
-    if not _adc_obj:
-        _adc_obj = ADC("A4")  # type: ignore
-    raw_v: float = _adc_obj.read_voltage()  # type: ignore
-    return raw_v * 3.0
+    from .adc import ADC       # local import avoids the circular cycle
+    if not isinstance(_adc_obj, ADC):
+        _adc_obj = ADC("A4")
+    raw_voltage = _adc_obj.read_voltage()
+    return raw_voltage * 3.0
 
 
 def get_username() -> str:

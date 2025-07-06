@@ -3,7 +3,7 @@
 Pulse width modulation (PWM) via I2C for Robot Hat.
 """
 import math
-from typing import Union, Optional, List, Dict
+from typing import Union, Optional, List, Dict, Any
 from .i2c import I2C
 
 # Global timer configuration for PWM: list of dictionaries with 'arr' keys

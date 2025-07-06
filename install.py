@@ -1,243 +1,162 @@
 #!/usr/bin/env python3
-from os import path
-import sys
-import os
-import time
-import threading
+"""
+robot-hat install.py
 
-here = path.abspath(path.dirname(__file__))
-os.chdir(here)
-sys.path.append('./robot_hat')
-from version import __version__
+System/hardware/software setup for robot-hat on Raspberry Pi 4B, Bookworm 64-bit.
 
-print("Robot Hat Python Library v%s" % __version__)
+- Installs required apt packages (skips if already installed)
+- Enables I2C/SPI interfaces
+- Copies overlays if present
+- Installs Python dependencies and robot-hat package via pip
 
-avaiable_options = ["--no-dep", "--only-lib", "--no-build-isolation"]
-options = []
-if len(sys.argv) > 1:
-    options = list.copy(sys.argv[1:])
+Run with: sudo python3 install.py
+"""
 
+import os, sys, subprocess, time, threading
 
-# define color print
-# =================================================================
-def warn(msg, end='\n', file=sys.stdout, flush=False):
-    print(f'\033[0;33m{msg}\033[0m', end=end, file=file, flush=flush)
+# --- Colored output helpers ---
+def print_info(msg): print(f"\033[0;36m{msg}\033[0m")
+def print_warn(msg): print(f"\033[0;33m{msg}\033[0m")
+def print_err(msg): print(f"\033[0;31m{msg}\033[0m")
+def print_success(msg): print(f"\033[0;32m{msg}\033[0m")
 
-def error(msg, end='\n', file=sys.stdout, flush=False):
-    print(f'\033[0;31m{msg}\033[0m', end=end, file=file, flush=flush)
-
-# check if run as root
-# =================================================================
-if os.geteuid() != 0:
-    warn("Script must be run as root. Try \"sudo python3 install.py\".")
-    sys.exit(1)
-
-# utils
-# =================================================================
-def run_command(cmd=""):
-    import subprocess
-    p = subprocess.Popen(cmd,
-                         shell=True,
-                         stdout=subprocess.PIPE,
-                         stderr=subprocess.STDOUT)
-    result = p.stdout.read().decode('utf-8')
-    status = p.poll()
-    return status, result
-
-errors = []
-at_work_tip_sw = False
-
+# --- Spinner ---
 def working_tip():
     char = ['/', '-', '\\', '|']
     i = 0
-    global at_work_tip_sw
     while at_work_tip_sw:
         i = (i + 1) % 4
-        sys.stdout.write('\033[?25l')  # cursor invisible
-        sys.stdout.write('%s\033[1D' % char[i])
+        sys.stdout.write('\033[?25l' + f'{char[i]}\033[1D')
         sys.stdout.flush()
-        time.sleep(0.5)
-
-    sys.stdout.write(' \033[1D')
-    sys.stdout.write('\033[?25h')  # cursor visible
+        time.sleep(0.3)
+    sys.stdout.write(' \033[1D\033[?25h')
     sys.stdout.flush()
 
+# --- Command runner ---
+def run_command(cmd):
+    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    output = p.stdout.read().decode()
+    status = p.wait()
+    return status, output.strip()
 
-def do(msg="", cmd=""):
-    print(" - %s ... " % (msg), end='', flush=True)
-    # at_work_tip start
+def do(msg, cmd):
+    print(f" - {msg} ... ", end='', flush=True)
     global at_work_tip_sw
     at_work_tip_sw = True
     _thread = threading.Thread(target=working_tip)
     _thread.daemon = True
     _thread.start()
-    # process run
     status, result = run_command(cmd)
-    # print(status, result)
-    # at_work_tip stop
     at_work_tip_sw = False
-    _thread.join()  # wait for thread to finish
-    # status
-    if status == 0 or status == None or result == "":
-        print('Done')
+    _thread.join()
+    if status == 0:
+        print("Done")
+        return True
     else:
-        print('Error')
-        errors.append("%s error:\n  Status:%s\n  Error:%s" %
-                      (msg, status, result))
+        print("Error")
+        errors.append(f"{msg}:\n  {result}")
+        return False
 
+# --- Checks ---
+def is_apt_package_installed(pkg):
+    status, _ = run_command(f"dpkg -s {pkg}")
+    return status == 0
 
-def check_raspbain_version():
-    _, result = run_command("cat /etc/debian_version|awk -F. '{print $1}'")
-    return int(result.strip())
+def is_rpi_4b():
+    try:
+        with open('/proc/device-tree/model') as f:
+            return 'Raspberry Pi 4' in f.read()
+    except Exception:
+        return False
 
-
-def check_os_bit():
-    '''
-    # import platform
-    # machine_type = platform.machine() 
-    latest bullseye uses a 64-bit kernel
-    This method is no longer applicable, the latest raspbian will uses 64-bit kernel 
-    (kernel 6.1.x) by default, "uname -m" shows "aarch64", 
-    but the system is still 32-bit.
-    '''
-    _, os_bit = run_command("getconf LONG_BIT")
-    return int(os_bit)
-
-# check system
-# =================================================================
-raspbain_version = check_raspbain_version()
-os_bit = check_os_bit()
-
-# Dependencies list installed with apt
-# =================================================================
-APT_INSTALL_LIST = [
-    'raspi-config',
-    "i2c-tools",
-    "espeak",
-    'libsdl2-dev',
-    'libsdl2-mixer-dev',
-    'portaudio19-dev',  # pyaudio
-    'sox',
-]
-if raspbain_version in [12] and os_bit == 64:
-    APT_INSTALL_LIST.append("libttspico-utils")  # tts -> pico2wave
-
-# Dependencies list installed with pip3
-# =================================================================
-PIP_INSTALL_LIST = [
-    'smbus2',
-    'gpiozero',
-    'pyaudio',
-    'spidev',
-    'pyserial',
-    'pillow',
-    "'pygame>=2.1.2'",
-]
-
-
-# main
-# =================================================================
-def install():
-    # check whether pip has the option "--break-system-packages"
-    _is_bsps = ''
-    status, _ = run_command("pip3 help install|grep break-system-packages")
-    if status == 0: # if true
-        _is_bsps = "--break-system-packages"
-
-    # --- install robot_hat package ---
-    _if_build_isolation = ""
-    if "--no-build-isolation" in options:
-        _if_build_isolation = "--no-build-isolation"
-    do(msg=f"install robot_hat package {_if_build_isolation}",
-       cmd=f'pip3 install ./ {_is_bsps} {_if_build_isolation}')
-
-    # --- only-library ---
-    if "--only-lib" not in options:
-        # --- install dependencies ---
-        if "--no-dep" not in options:
-            # --------------------------------
-            print("Install dependencies with apt-get:")
-            # update apt-get
-            do(msg="update apt-get", cmd='apt-get update')
-            #
-            for dep in APT_INSTALL_LIST:
-                do(msg=f"install {dep}", cmd=f'apt-get install {dep} -y')
-            #
-            if 'libttspico-utils' not in APT_INSTALL_LIST:
-                _pool = 'http://ftp.debian.org/debian/pool/non-free/s/svox/'
-                if raspbain_version >= 12:
-                    libttspico= 'libttspico0t64_1.0+git20130326-14.1_armhf.deb'
-                    libttspico_utils = 'libttspico-utils_1.0+git20130326-14.1_armhf.deb'
-                elif raspbain_version < 12:
-                    libttspico = 'libttspico0_1.0+git20130326-11_armhf.deb'
-                    libttspico_utils = 'libttspico-utils_1.0+git20130326-11_armhf.deb'
-                do(msg="install pico2wave",
-                    cmd=f'wget {_pool}{libttspico}' +
-                    f' &&wget {_pool}{libttspico_utils}' +
-                    f' && apt-get install -f ./{libttspico} ./{libttspico_utils} -y'
-                    )
-            # --------------------------------
-            print("Install dependencies with pip3:")
-            # check whether pip has the option "--break-system-packages"
-            if _is_bsps != '':
-                _is_bsps = "--break-system-packages"
-                print(
-                    "\033[38;5;8m pip3 install with --break-system-packages\033[0m"
-                )
-            # update pip
-            do(msg="update pip3",
-                cmd=f'python3 -m pip install --upgrade pip {_is_bsps}')
-            #
-            for dep in PIP_INSTALL_LIST:
-                do(msg=f"install {dep}",
-                    cmd=f'pip3 install {dep} {_is_bsps}')
-
-        # --- Setup interfaces ---
-        print("Setup interfaces")
-        do(msg="turn on I2C", cmd='raspi-config nonint do_i2c 0')
-        do(msg="turn on SPI", cmd='raspi-config nonint do_spi 0')
-
-        # --- Copy servohat dtoverlay ---
-        print("Copy dtoverlay")
-        DEFAULT_OVERLAYS_PATH = "/boot/firmware/overlays/"
-        LEGACY_OVERLAYS_PATH = "/boot/overlays/"
-        _overlays_path = None
-        if os.path.exists(DEFAULT_OVERLAYS_PATH):
-            _overlays_path = DEFAULT_OVERLAYS_PATH
-        elif os.path.exists(LEGACY_OVERLAYS_PATH):
-            _overlays_path = LEGACY_OVERLAYS_PATH
-        else:
-            _overlays_path = None
-
-        if _overlays_path is not None:
-            do(msg="copy dtoverlay",
-            cmd=f'cp ./dtoverlays/* {_overlays_path}')
-
-    # --- Report error ---
-    if len(errors) == 0:
-        print("Finished")
-    else:
-        print("\n\nError happened in install process:")
-        for error in errors:
-            print(error)
-        print(
-            "Try to fix it yourself, or contact service@sunfounder.com with this message"
-        )
-
+def is_bookworm():
+    try:
+        with open('/etc/os-release') as f:
+            return 'bookworm' in f.read()
+    except Exception:
+        return False
 
 if __name__ == "__main__":
-    try:
-        install()
-    except KeyboardInterrupt:
-        if len(errors) > 0:
-            print("\n\nError happened in install process:")
-            for error in errors:
-                print(error)
-            print(
-                "Try to fix it yourself, or contact service@sunfounder.com with this message"
-            )
-        print("\n\nCanceled.")
-    finally:
-        sys.stdout.write(' \033[1D')
-        sys.stdout.write('\033[?25h') # cursor visible 
-        sys.stdout.flush()
+    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
+        print(__doc__)
+        sys.exit(0)
+
+    if os.geteuid() != 0:
+        print_err("Script must be run as root. Try 'sudo python3 install.py'")
+        sys.exit(1)
+
+    print_info("robot-hat: System/Hardware/Software Setup (Bookworm 64, Pi 4B)")
+
+    # Platform/OS warnings
+    if not is_rpi_4b():
+        print_warn("Warning: Not running on Raspberry Pi 4B. Proceed at your own risk.")
+    if not is_bookworm():
+        print_warn("Warning: Detected OS is not Bookworm. Proceed at your own risk.")
+
+    errors = []
+    at_work_tip_sw = False
+
+    # --- System dependencies ---
+    APT_INSTALL_LIST = [
+        "raspi-config",
+        "i2c-tools",
+        "espeak",
+        "libsdl2-dev",
+        "libsdl2-mixer-dev",
+        "portaudio19-dev",
+        "sox",
+        "libttspico-utils"
+    ]
+
+    print_info("\nInstalling system dependencies via apt...")
+    do("apt-get update", "apt-get update")
+    for pkg in APT_INSTALL_LIST:
+        if not is_apt_package_installed(pkg):
+            do(f"apt install {pkg}", f"apt-get install -y {pkg}")
+        else:
+            print_success(f" - {pkg} already installed.")
+
+    # --- Interfaces ---
+    print_info("\nEnabling I2C and SPI interfaces...")
+    do("Enable I2C", "raspi-config nonint do_i2c 0")
+    do("Enable SPI", "raspi-config nonint do_spi 0")
+
+    # --- Overlays ---
+    OVERLAYS_SRC = "./dtoverlays"
+    OVERLAYS_DST = "/boot/firmware/overlays/"
+    overlays_copied = False
+    if os.path.isdir(OVERLAYS_SRC) and os.path.isdir(OVERLAYS_DST):
+        for fname in os.listdir(OVERLAYS_SRC):
+            src = os.path.join(OVERLAYS_SRC, fname)
+            dst = os.path.join(OVERLAYS_DST, fname)
+            if not os.path.isfile(dst) or (os.path.getmtime(src) > os.path.getmtime(dst)):
+                do(f"Copy overlay {fname}", f"cp -u '{src}' '{dst}'")
+                overlays_copied = True
+        if not overlays_copied:
+            print_success(" - All overlays already up to date.")
+    else:
+        print_warn("Overlay source or destination not found. Skipping overlay copy.")
+
+    # --- Install Python dependencies and robot-hat package ---
+    print_info("\nInstalling Python dependencies and robot-hat package (this may take a few minutes)...")
+    # Use --break-system-packages if available (for Bookworm pip)
+    status, _ = run_command("pip3 help install | grep break-system-packages")
+    pip_extra = "--break-system-packages" if status == 0 else ""
+    do("pip install .", f"python3 -m pip install . {pip_extra}")
+
+    # --- Summary ---
+    print_info("\n========== INSTALL SUMMARY ==========")
+    if not errors:
+        print_success("System, hardware, and Python setup finished successfully!")
+    else:
+        print_err("Some errors occurred during setup:")
+        for e in errors:
+            print_err(f"- {e}")
+        print_warn("Please review the errors above before continuing.")
+
+    print_info("\nPlease reboot your Pi before using robot-hat!")
+    print_success("sudo reboot")
+
+    # Always restore terminal on exit
+    sys.stdout.write(' \033[1D\033[?25h')
+    sys.stdout.flush()

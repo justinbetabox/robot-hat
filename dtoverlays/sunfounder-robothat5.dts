@@ -1,0 +1,79 @@
+/dts-v1/;
+
+/ {
+    compatible = "brcm,bcm2835";
+
+    /* Hint how much current the HAT can draw */
+    fragment@0 {
+        target-path = "/chosen";
+        __overlay__ {
+            power {
+                hat_current_supply = <0x1388>;
+            };
+        };
+    };
+
+    /* Enable the I2C, SPI and I2S controllers */
+    fragment@1 {
+        target = <0xffffffff>;
+        __overlay__ {
+            status = "okay";
+        };
+    };
+    fragment@2 {
+        target = <0xffffffff>;
+        __overlay__ {
+            status = "okay";
+        };
+    };
+    fragment@3 {
+        target = <0xffffffff>;
+        __overlay__ {
+            status = "okay";
+        };
+    };
+
+    /* Declare the voice‐hat’s GPIO block as a GPIO controller */
+    fragment@4 {
+        target-path = "/";
+        __overlay__ {
+            gpio_googlevoicehat: googlevoicehat_pins {
+                gpio-controller;
+                #gpio-cells = <2>;
+                phandle = <0x01>;
+
+                /* pin settings: this example assumes pin 16 (0x10) is used */
+                brcm,pins     = <0x10>;
+                brcm,function = <0x01>;
+                brcm,pull     = <0x00>;
+            };
+        };
+    };
+
+    /* Bind the audio CODEC and point its sdmode‐GPIO to our controller */
+    fragment@5 {
+        target-path = "/";
+        __overlay__ {
+            voicehat_codec: voicehat-codec {
+                compatible       = "google,voicehat";
+                #sound-dai-cells = <0>;
+                pinctrl-names    = "default";
+                pinctrl-0        = <&gpio_googlevoicehat>;
+                sdmode-gpios     = <&gpio_googlevoicehat 0x10 0x00>;
+                status           = "okay";
+            };
+        };
+    };
+
+    /* Finally, bind the I2S soundcard driver */
+    fragment@6 {
+        target = <0xffffffff>;
+        __overlay__ {
+            sound {
+                compatible     = "googlevoicehat,googlevoicehat-soundcard";
+                i2s-controller = <0xffffffff>;
+                status         = "okay";
+            };
+        };
+    };
+};

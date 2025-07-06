@@ -1,155 +1,192 @@
 #!/usr/bin/env bash
 #
 # Configure the Robot Hat I²S audio overlay, ALSA, and PulseAudio settings.
-# Detect Robot Hat via I²C, install and load correct overlay, then configure audio.
+#
 
-# Global variables
 VERSION="0.0.4"
 USERNAME=${SUDO_USER:-$LOGNAME}
 USER_RUN="sudo -u ${USERNAME} env XDG_RUNTIME_DIR=/run/user/$(id -u ${USERNAME})"
 
-# Determine boot and overlays directories
-if [ -d /boot/firmware ]; then
-  BOOTDIR=/boot/firmware
-else
-  BOOTDIR=/boot
+CONFIG="/boot/firmware/config.txt"
+if ! test -f "$CONFIG"; then
+    CONFIG="/boot/config.txt"
 fi
-CONFIG="$BOOTDIR/config.txt"
-OVERLAYS_DIR="$BOOTDIR/overlays"
+
 ASOUND_CONF="/etc/asound.conf"
 
-# Overlays and card names
-DTOVERLAY_WITHOUT_MIC="hifiberry-dac"
-AUDIO_CARD_NAME_WITHOUT_MIC="sndrpihifiberry"
+DTOVERLAY_NO_MIC="hifiberry-dac"
+CARD_NAME_NO_MIC="sndrpihifiberry"
 
-DTOVERLAY_WITH_MIC="googlevoicehat-soundcard"
-AUDIO_CARD_NAME_WITH_MIC="sndrpigooglevoicehat"
+DTOVERLAY_MIC="googlevoicehat-soundcard"
+CARD_NAME_MIC="sndrpigooglevoi"
 
 SOFTVOL_SPEAKER_NAME="robot-hat speaker"
 SOFTVOL_MIC_NAME="robot-hat mic"
 
-# Helper functions for logging
-debug(){ echo -e "[DEBUG] $*"; }
-success(){ echo -e "[OK] $*"; }
-info(){ echo -e "[INFO] $*"; }
-warning(){ echo -e "[WARN] $*"; }
-error(){ echo -e "[ERROR] $*"; }
+HAT_UUIDS=("9daeea78-0000-076e-0032-582369ac3e02")
+HAT_DEVICE_TREE="/proc/device-tree/"
 
-# Must run as root
+_is_with_mic=false
+overlay=""
+card=""
+
+success(){ echo -e "\e[32m$1\e[0m"; }
+info  (){ echo -e "\e[36m$1\e[0m"; }
+warning(){ echo -e "\e[33m$1\e[0m"; }
+error (){ echo -e "\e[31m$1\e[0m"; }
+
 sudocheck(){
   if [ "$(id -u)" -ne 0 ]; then
-    error "Run as root: sudo bash ./i2samp.sh"
+    error "Must be root. Use sudo $0"
     exit 1
   fi
 }
 
-# Check for sound card index
+detect_hat(){
+  for d in ${HAT_DEVICE_TREE}*hat*; do
+    [ ! -d "$d" ] && continue
+    if [ -f "$d/uuid" ]; then
+      u=$(tr -d '\0' <"$d/uuid")
+      for hu in "${HAT_UUIDS[@]}"; do
+        if [ "$u" = "$hu" ]; then
+          info "Robot Hat detected via I2C: UUID $u"
+          _is_with_mic=true
+          return
+        fi
+      done
+    fi
+  done
+  warning "No Robot Hat detected; defaulting to no-mic overlay"
+  _is_with_mic=false
+}
+
 get_card_index(){
-  grep "$1" <(aplay -l) | awk '/card/ {print $2}' | tr -d ':' | head -n1
+  local name=$1
+  idx=$(aplay -l | grep "$name" | awk '/card/ {print $2}' | tr -d ':' | head -n1)
+  echo $idx
 }
 
-# Generate ALSA config for no-mic
-config_asound_without_mic(){
-  cp "$ASOUND_CONF" "${ASOUND_CONF}.old" 2>/dev/null || :
-  cat > "$ASOUND_CONF" <<EOF
-pcm.speaker { type hw; card $AUDIO_CARD_NAME_WITHOUT_MIC }
-pcm.dmixer { type dmix; ipc_key 1024; ipc_perm 0666; slave { pcm "speaker"; rate 44100; channels 2 } }
-ctl.dmixer { type hw; card $AUDIO_CARD_NAME_WITHOUT_MIC }
-pcm.softvol { type softvol; slave.pcm "dmixer"; control { name "$SOFTVOL_SPEAKER_NAME Playback Volume"; card $AUDIO_CARD_NAME_WITHOUT_MIC } }
-pcm.robothat { type plug; slave.pcm "softvol" }
-ctl.robothat { type hw; card $AUDIO_CARD_NAME_WITHOUT_MIC }
-pcm.!default robothat
+config_asound_no_mic(){
+  cat >"$ASOUND_CONF" <<EOF
+pcm.speaker {
+  type hw
+  card $card
+}
+pcm.dmixer {
+  type dmix
+  ipc_key 1024
+  ipc_perm 0666
+  slave {
+    pcm "speaker"
+    period_time 0
+    period_size 1024
+    buffer_size 8192
+    rate 44100
+    channels 2
+  }
+}
+ctl.dmixer { type hw; card $card; }
+pcm.softvol {
+  type softvol
+  slave.pcm "dmixer"
+  control.name "$SOFTVOL_SPEAKER_NAME Playback Volume"
+  control.card $card
+  min_dB -51.0
+  max_dB 0.0
+}
+pcm.!default softvol
+ctl.!default softvol
 EOF
+  success "Written $ASOUND_CONF for HiFiBerry DAC"
 }
 
-# Generate ALSA config for with-mic
-config_asound_with_mic(){
-  cp "$ASOUND_CONF" "${ASOUND_CONF}.old" 2>/dev/null || :
-  cat > "$ASOUND_CONF" <<EOF
-pcm.robothat { type asym; playback.pcm { type plug; slave.pcm "speaker" }; capture.pcm { type plug; slave.pcm "mic" } }
-pcm.speaker_hw { type hw; card $AUDIO_CARD_NAME_WITH_MIC; device 0 }
-pcm.dmixer { type dmix; ipc_key 1024; ipc_perm 0666; slave { pcm "speaker_hw"; rate 44100; channels 2 } }
-ctl.dmixer { type hw; card $AUDIO_CARD_NAME_WITH_MIC }
-pcm.speaker { type softvol; slave.pcm "dmixer"; control { name "$SOFTVOL_SPEAKER_NAME Playback Volume"; card $AUDIO_CARD_NAME_WITH_MIC } }
-pcm.mic_hw { type hw; card $AUDIO_CARD_NAME_WITH_MIC; device 0 }
-pcm.mic { type softvol; slave.pcm "mic_hw"; control { name "$SOFTVOL_MIC_NAME Capture Volume"; card $AUDIO_CARD_NAME_WITH_MIC } }
-ctl.robothat { type hw; card $AUDIO_CARD_NAME_WITH_MIC }
+config_asound_mic(){
+  cat >"$ASOUND_CONF" <<EOF
+pcm.robothat {
+  type asym
+  playback.pcm { type plug; slave.pcm "speaker"; }
+  capture.pcm  { type plug; slave.pcm "mic"; }
+}
+pcm.speaker {
+  type hw
+  card $card
+  device 0
+}
+pcm.dmixer { 
+  type dmix; ipc_key 1024; ipc_perm 0666;
+  slave { pcm "speaker"; rate 44100; channels 2; }
+}
+ctl.dmixer { type hw; card $card; }
+pcm.softvol {
+  type softvol
+  slave.pcm "dmixer"
+  control.name "$SOFTVOL_SPEAKER_NAME Playback Volume"
+  control.card $card
+  min_dB -51.0; max_dB 0.0
+}
+pcm.mic {
+  type hw
+  card $card
+  device 0
+}
+ctl.mic { type hw; card $card; }
 pcm.!default robothat
+ctl.!default robothat
 EOF
+  success "Written $ASOUND_CONF for Voice HAT"
 }
 
-# Main installation routine
 main(){
   sudocheck
+  detect_hat
 
-  # Detect Robot Hat presence via I2C addresses 0x14 or 0x15
-  if i2cdetect -y 1 | grep -qwE '(^|[[:space:]])(14|15)([[:space:]]|$)'; then
-    _is_with_mic=true
-    dtoverlay_name="$DTOVERLAY_WITH_MIC"
-    audio_card_name="$AUDIO_CARD_NAME_WITH_MIC"
-    info "Robot Hat detected via I2C: using mic overlay"
+  if [ "$_is_with_mic" = true ]; then
+    info "Using mic overlay → $DTOVERLAY_MIC"
+    overlay=$DTOVERLAY_MIC
+    card=$CARD_NAME_MIC
   else
-    _is_with_mic=false
-    dtoverlay_name="$DTOVERLAY_WITHOUT_MIC"
-    audio_card_name="$AUDIO_CARD_NAME_WITHOUT_MIC"
-    warning "No Robot Hat detected via I2C: using no-mic overlay"
+    info "Forcing no-mic overlay → $DTOVERLAY_NO_MIC"
+    overlay=$DTOVERLAY_NO_MIC
+    card=$CARD_NAME_NO_MIC
   fi
 
-  # Ensure overlay .dtbo exists in overlays directory
-  if [ ! -f "$OVERLAYS_DIR/${dtoverlay_name}.dtbo" ]; then
-    if [ -d "$(dirname "$0")/dtoverlays" ] && [ -f "$(dirname "$0")/dtoverlays/${dtoverlay_name}.dtbo" ]; then
-      info "Copying ${dtoverlay_name}.dtbo to $OVERLAYS_DIR"
-      cp "$(dirname "$0")/dtoverlays/${dtoverlay_name}.dtbo" "$OVERLAYS_DIR/"
-    else
-      error "Overlay ${dtoverlay_name}.dtbo not found in $OVERLAYS_DIR or repo dtoverlays"
-      exit 1
-    fi
+  # add dtoverlay to config.txt if missing
+  if ! grep -q "^dtoverlay=${overlay}" "$CONFIG"; then
+    echo "" >>"$CONFIG"
+    echo "dtoverlay=${overlay}" >>"$CONFIG"
+    success "Added dtoverlay=${overlay} to $CONFIG"
+  else
+    info "dtoverlay=${overlay} already in $CONFIG"
   fi
 
-  # Persist overlay into config.txt
-  info "Installing overlay: $dtoverlay_name into $CONFIG"
-  sed -i "/^dtoverlay=${DTOVERLAY_WITH_MIC}/d" "$CONFIG"
-  sed -i "/^dtoverlay=${DTOVERLAY_WITHOUT_MIC}/d" "$CONFIG"
-  echo "dtoverlay=$dtoverlay_name" | tee -a "$CONFIG"
+  info "Loading overlay: $overlay"
+  dtoverlay "$overlay" || warning "Failed to load dtoverlay $overlay (kernel may not support)"
 
-  # Dynamically load overlay
-  info "Loading overlay: $dtoverlay_name..."
-  dtoverlay "$dtoverlay_name" || { error "Failed to load overlay $dtoverlay_name"; exit 1; }
   sleep 1
-
-  # Verify card appears
-  idx=$(get_card_index "$audio_card_name")
+  idx=$(get_card_index "$card")
   if [ -z "$idx" ]; then
-    error "Soundcard $audio_card_name not found after loading overlay"
-    echo "Run: speaker-test -l1 -c2" >&2
+    error "Soundcard $card not found; you may need to reboot"
     exit 1
   fi
+  success "Detected $card as card $idx"
 
-  # Configure ALSA
-  info "Configuring ALSA for $audio_card_name..."
   if [ "$_is_with_mic" = true ]; then
-    config_asound_with_mic
+    config_asound_mic
   else
-    config_asound_without_mic
-  fi
-  systemctl restart alsa-utils
-
-  # Set volumes
-  info "Setting speaker volume to 100%"
-  amixer -c "$audio_card_name" sset "$SOFTVOL_SPEAKER_NAME" 100% || :
-  if [ "$_is_with_mic" = true ]; then
-    info "Setting mic volume to 100%"
-    amixer -c "$audio_card_name" sset "$SOFTVOL_MIC_NAME" 100% || :
+    config_asound_no_mic
   fi
 
-  # Start PulseAudio and set default sink
-  info "Starting PulseAudio..."
-  raspi-config nonint do_audioconf 1 2>/dev/null || :
-  $USER_RUN pulseaudio -D 2>/dev/null || :
-  sink=$(get_card_index "$audio_card_name")
-  $USER_RUN pactl set-default-sink "$sink" 2>/dev/null || :
+  info "Setting ALSA volume to 100%"
+  amixer -c "$idx" sset 'PCM' 100% >/dev/null 2>&1 || warning "Failed to set PCM volume"
 
-  success "Audio configuration complete"
+  info "Enabling PulseAudio"
+  raspi-config nonint do_audioconf 1 >/dev/null 2>&1
+  $USER_RUN pulseaudio -D >/dev/null 2>&1 || warning "Could not start PulseAudio"
+
+  info "Setting default Pulse sink to card $idx"
+  $USER_RUN pactl set-default-sink "$idx" >/dev/null 2>&1 || warning "Failed to set default sink"
+
+  success "I²S audio configuration complete!"
 }
 
 main
